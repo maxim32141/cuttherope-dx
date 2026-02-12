@@ -39,6 +39,23 @@ namespace CutTheRope.Desktop
         // (get) Token: 0x060000B8 RID: 184 RVA: 0x00004BF5 File Offset: 0x00002DF5
         public Rectangle ScaledViewRect => _scaledViewRect;
 
+        public Rectangle ScaledViewRectPixels => _scaledViewRectPixels;
+
+        public double BackingScale => _backingScaleState.CurrentScale;
+
+        public double EffectiveDisplayScale
+        {
+            get
+            {
+                double logicalScale = _scaledViewRect.Width > 0 ? _scaledViewRect.Width / (double)GameWidth : 1d;
+                return logicalScale * BackingScale;
+            }
+        }
+
+        public int SurfaceWidthPixels => Math.Max(1, (int)Math.Round(CurrentSize.Width * BackingScale, MidpointRounding.AwayFromZero));
+
+        public int SurfaceHeightPixels => Math.Max(1, (int)Math.Round(CurrentSize.Height * BackingScale, MidpointRounding.AwayFromZero));
+
         // (get) Token: 0x060000B9 RID: 185 RVA: 0x00004BFD File Offset: 0x00002DFD
         public bool SkipSizeChanges { get; private set; }
 
@@ -80,6 +97,7 @@ namespace CutTheRope.Desktop
 
         public void Init(DisplayMode displayMode, int windowWidth, bool isFullScreen)
         {
+            _ = TryUpdateBackingScale();
             FullScreenRectChanged(displayMode);
             int num = windowWidth > 0 ? windowWidth : displayMode.Width - 100;
             if (num < 800)
@@ -101,6 +119,17 @@ namespace CutTheRope.Desktop
                 return;
             }
             ApplyWindowSize(WindowWidth);
+        }
+
+        public bool RefreshBackingScaleIfChanged()
+        {
+            if (!TryUpdateBackingScale())
+            {
+                return false;
+            }
+
+            ApplyViewportToDevice();
+            return true;
         }
 
         public int ScaledGameWidth(int scaledHeight)
@@ -126,11 +155,13 @@ namespace CutTheRope.Desktop
                 int num = _fullScreenCropWidth ? sourceRect.Height : ScaledGameHeight(sourceRect.Width);
                 int num2 = _fullScreenCropWidth ? ScaledGameWidth(num) : sourceRect.Width;
                 _scaledViewRect = new Rectangle((sourceRect.Width - num2) / 2, (sourceRect.Height - num) / 2, num2, num);
+                _scaledViewRectPixels = BackingScaleMath.LogicalToPixelRect(_scaledViewRect, BackingScale);
                 return;
             }
             int num3 = _fullScreenCropWidth ? (int)(sourceRect.Width / 5f * 4f) : ScaledGameHeight(sourceRect.Width);
             int num4 = _fullScreenCropWidth ? ScaledGameWidth(num3) : sourceRect.Width;
             _scaledViewRect = new Rectangle((sourceRect.Width - num4) / 2, (sourceRect.Height - num3) / 2, num4, num3);
+            _scaledViewRectPixels = BackingScaleMath.LogicalToPixelRect(_scaledViewRect, BackingScale);
         }
 
         public void ApplyWindowSize(int width)
@@ -215,9 +246,23 @@ namespace CutTheRope.Desktop
 
         public void ApplyViewportToDevice()
         {
-            Rectangle bounds = !IsFullScreen ? Rectangle.Intersect(_scaledViewRect, _windowRect) : Rectangle.Intersect(_scaledViewRect, _fullScreenRect);
+            Rectangle boundsLogical = !IsFullScreen ? Rectangle.Intersect(_scaledViewRect, _windowRect) : Rectangle.Intersect(_scaledViewRect, _fullScreenRect);
+            Rectangle boundsPixels = BackingScaleMath.LogicalToPixelRect(boundsLogical, BackingScale);
             try
             {
+                if (Global.GraphicsDevice == null)
+                {
+                    return;
+                }
+
+                PresentationParameters presentationParameters = Global.GraphicsDevice.PresentationParameters;
+                Rectangle bounds = BackingScaleMath.ResolvePresentDestinationRect(
+                    boundsLogical,
+                    boundsPixels,
+                    presentationParameters.BackBufferWidth,
+                    presentationParameters.BackBufferHeight,
+                    BackingScale);
+
                 Global.GraphicsDevice.Viewport = new Viewport(bounds);
             }
             catch (Exception)
@@ -266,13 +311,86 @@ namespace CutTheRope.Desktop
             }
         }
 
+        private bool TryUpdateBackingScale()
+        {
+            double candidateScale;
+            try
+            {
+                if (!_backingScaleProvider.TryGetCurrentScale(out double reportedScale))
+                {
+                    return false;
+                }
+
+                candidateScale = reportedScale;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
+            if (ShouldIgnoreFullscreenDownscaleToOne(
+                    isFullScreen: IsFullScreen,
+                    isDesktopGLProvider: _backingScaleProvider is DesktopGLBackingScaleProvider,
+                    currentScale: _backingScaleState.CurrentScale,
+                    candidateScale: candidateScale))
+            {
+                return false;
+            }
+
+            if (!_backingScaleState.TryUpdate(candidateScale))
+            {
+                return false;
+            }
+
+            UpdateScaledView();
+            return true;
+        }
+
+        internal static bool ShouldIgnoreFullscreenDownscaleToOne(
+            bool isFullScreen,
+            bool isDesktopGLProvider,
+            double currentScale,
+            double candidateScale)
+        {
+            const double epsilon = 0.01d;
+            if (!isFullScreen || !isDesktopGLProvider)
+            {
+                return false;
+            }
+
+            if (currentScale <= (1d + epsilon))
+            {
+                return false;
+            }
+
+            double normalizedCandidate = BackingScaleMath.NormalizeScale(candidateScale);
+            return Math.Abs(normalizedCandidate - 1d) <= epsilon;
+        }
+
+        private static IBackingScaleProvider CreateBackingScaleProvider()
+        {
+            if (!OperatingSystem.IsMacOS())
+            {
+                return new FallbackBackingScaleProvider();
+            }
+
+#if MACOS_AVFOUNDATION
+            return new MacBackingScaleProvider();
+#else
+            return new DesktopGLBackingScaleProvider();
+#endif
+        }
+
         public const int MIN_WINDOW_WIDTH = 800;
         private Rectangle _windowRect;
 
         private Rectangle _fullScreenRect;
         private readonly double _gameAspectRatio = gameHeight / (double)gameWidth;
 
+        private readonly IBackingScaleProvider _backingScaleProvider = CreateBackingScaleProvider();
+        private readonly BackingScaleState _backingScaleState = new(1d, epsilon: 0.01d, downscaleToOneConfirmationReadings: 3);
         private Rectangle _scaledViewRect;
+        private Rectangle _scaledViewRectPixels;
         private bool _fullScreenCropWidth = true;
     }
 }
