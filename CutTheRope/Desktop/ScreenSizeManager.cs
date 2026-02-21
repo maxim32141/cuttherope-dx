@@ -73,7 +73,7 @@ namespace CutTheRope.Desktop
         }
 
         // (get) Token: 0x060000BB RID: 187 RVA: 0x00004C1D File Offset: 0x00002E1D
-        public double WidthAspectRatio => _scaledViewRect.Width / (double)GameWidth;
+        public double WidthAspectRatio => _scaledViewRect.Width / GameWidth;
 
         public int TransformWindowToViewX(int x)
         {
@@ -385,7 +385,7 @@ namespace CutTheRope.Desktop
         private Rectangle _windowRect;
 
         private Rectangle _fullScreenRect;
-        private readonly double _gameAspectRatio = gameHeight / (double)gameWidth;
+        private readonly double _gameAspectRatio = gameHeight / gameWidth;
 
         private readonly IBackingScaleProvider _backingScaleProvider = CreateBackingScaleProvider();
         private readonly BackingScaleState _backingScaleState = new(1d, epsilon: 0.01d, downscaleToOneConfirmationReadings: 3);
