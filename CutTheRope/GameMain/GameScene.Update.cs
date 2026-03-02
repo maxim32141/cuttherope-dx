@@ -591,7 +591,7 @@ namespace CutTheRope.GameMain
                     starR.AddConstraintwithRestLengthofType(starL, partsDist, Constraint.CONSTRAINT.NOT_MORE_THAN);
                 }
             }
-            target.Update(delta);
+            targetObject?.Update(delta);
             UpdateLightBulbPhysics(delta);
             UpdateNightLevel(delta);
             if (delta > 0f)
@@ -659,9 +659,9 @@ namespace CutTheRope.GameMain
                             3 => Resources.Snd.Star3,
                             _ => Resources.Snd.Star1
                         });
-                        if (target.GetCurrentTimelineIndex() == 0)
+                        if (targetAnimationController?.IsIdleLoopPlaying() == true)
                         {
-                            target.PlayAnimationtimeline(Resources.Img.CharAnimations2, 3);
+                            targetAnimationController.PlayExcited();
                             break;
                         }
                         break;
@@ -1633,10 +1633,10 @@ namespace CutTheRope.GameMain
             {
                 if (!mouthOpen && canInteractWithTarget)
                 {
-                    if (!isCandyInLantern && VectDistance(star.pos, Vect(target.x, target.y)) < 200f)
+                    if (!isCandyInLantern && targetObject != null && VectDistance(star.pos, Vect(targetObject.x, targetObject.y)) < 200f)
                     {
                         mouthOpen = true;
-                        target.PlayTimeline(7);
+                        targetAnimationController?.PlayMouthOpening();
                         CTRSoundMgr.PlaySound(Resources.Snd.MonsterOpen);
                         mouthCloseTimer = 1f;
                     }
@@ -1646,10 +1646,10 @@ namespace CutTheRope.GameMain
                     _ = Mover.MoveVariableToTarget(ref mouthCloseTimer, 0, 1, delta);
                     if (mouthCloseTimer <= 0)
                     {
-                        if (isCandyInLantern || VectDistance(star.pos, Vect(target.x, target.y)) > 200f)
+                        if (targetObject == null || isCandyInLantern || VectDistance(star.pos, Vect(targetObject.x, targetObject.y)) > 200f)
                         {
                             mouthOpen = false;
-                            target.PlayTimeline(8);
+                            targetAnimationController?.PlayMouthClosing();
                             CTRSoundMgr.PlaySound(Resources.Snd.MonsterClose);
                             tummyTeasers++;
                             if (tummyTeasers >= 10)
@@ -1663,7 +1663,7 @@ namespace CutTheRope.GameMain
                         }
                     }
                 }
-                if (restartState != 0 && canInteractWithTarget && GameObject.ObjectsIntersect(candy, target))
+                if (restartState != 0 && canInteractWithTarget && targetObject != null && GameObject.ObjectsIntersect(candy, targetObject))
                 {
                     GameWon();
                     return;
@@ -1869,15 +1869,37 @@ namespace CutTheRope.GameMain
                 float distance = VectDistance(hand.cPoint.pos, star.pos);
                 foreach (MechanicalHand otherHand in hands)
                 {
-                    if (otherHand != null && otherHand != hand && otherHand.state == MechanicalHand.STATE_HAND_CANDY)
+                    if (otherHand == null || otherHand == hand)
+                    {
+                        continue;
+                    }
+
+                    if (otherHand.state == MechanicalHand.STATE_HAND_CANDY)
                     {
                         distance = VectDistance(hand.cPoint.pos, otherHand.cPoint.pos);
+                    }
+
+                    if (hand.state == MechanicalHand.STATE_HAND_IDLE && otherHand.state == MechanicalHand.STATE_HAND_IDLE)
+                    {
+                        float handDistance = VectDistance(hand.cPoint.pos, otherHand.cPoint.pos);
+                        if (handDistance < MechanicalHand.MH_CLAP_DISTANCE)
+                        {
+                            if ((hand.clapTimer <= 0f || otherHand.clapTimer <= 0f) && (hand.canPlayClap || otherHand.canPlayClap))
+                            {
+                                PlayMechanicalHandClapEffectAt(otherHand.ClawPosition());
+                                hand.AnimateClap();
+                                otherHand.AnimateClap();
+                                CTRSoundMgr.PlaySound(Resources.Snd.ExpHandClap);
+                            }
+
+                            hand.clapTimer = MechanicalHand.MH_CLAP_COOLDOWN;
+                            otherHand.clapTimer = MechanicalHand.MH_CLAP_COOLDOWN;
+                        }
                     }
                 }
 
                 if (hand.state == MechanicalHand.STATE_HAND_IDLE && distance < MechanicalHand.MH_GRAB_DISTANCE && !noCandy && !isCandyInLantern && targetSock == null)
                 {
-                    MechanicalHand releasedHand = null;
                     if (hands.Count > 1)
                     {
                         foreach (MechanicalHand otherHand in hands)
@@ -1887,7 +1909,6 @@ namespace CutTheRope.GameMain
                                 otherHand.cPoint.RemoveConstraint(star);
                                 otherHand.state = MechanicalHand.STATE_HAND_RELEASE;
                                 otherHand.releaseSoundPlayed = false;
-                                releasedHand = otherHand;
                                 reorderHands = true;
                                 break;
                             }
@@ -1920,12 +1941,6 @@ namespace CutTheRope.GameMain
                         }
                     }
 
-                    if (releasedHand != null)
-                    {
-                        Vector clapPosition = VectMult(VectAdd(releasedHand.ClawPosition(), hand.ClawPosition()), 0.5f);
-                        PlayMechanicalHandClapEffectAt(clapPosition);
-                    }
-
                     DetachActiveSnails();
                     miceManager?.ForceDropCandy();
                     hand.AnimateCatchWithCandyPartsandAnimationsPool([candy, candyMain, candyTop], aniPool);
@@ -1955,29 +1970,26 @@ namespace CutTheRope.GameMain
         }
 
         /// <summary>
-        /// Spawns a short-lived clap effect for hand handoff moments.
+        /// Spawns a short-lived clap effect for idle hand proximity claps.
         /// </summary>
         /// <param name="position">World position where the effect should appear.</param>
         private void PlayMechanicalHandClapEffectAt(Vector position)
         {
             Image clapEffect = Image.Image_createWithResIDQuad(Resources.Img.ObjRoboHand, 9);
-            clapEffect.DoRestoreCutTransparency();
             clapEffect.anchor = 18;
-            clapEffect.parentAnchor = 18;
             clapEffect.x = position.X;
             clapEffect.y = position.Y;
+            _ = aniPool.AddChild(clapEffect);
 
-            Timeline timeline = new Timeline().InitWithMaxKeyFramesOnTrack(4);
-            timeline.AddKeyFrame(KeyFrame.MakeScale(0.8f, 0.8f, KeyFrame.TransitionType.FRAME_TRANSITION_IMMEDIATE, 0));
-            timeline.AddKeyFrame(KeyFrame.MakeScale(1.12f, 1.12f, KeyFrame.TransitionType.FRAME_TRANSITION_EASE_OUT, 0.05f));
-            timeline.AddKeyFrame(KeyFrame.MakeScale(1, 1, KeyFrame.TransitionType.FRAME_TRANSITION_EASE_IN, 0.06f));
-            timeline.AddKeyFrame(KeyFrame.MakeColor(RGBAColor.solidOpaqueRGBA, KeyFrame.TransitionType.FRAME_TRANSITION_IMMEDIATE, 0));
-            timeline.AddKeyFrame(KeyFrame.MakeColor(RGBAColor.transparentRGBA, KeyFrame.TransitionType.FRAME_TRANSITION_LINEAR, 0.12f));
+            Timeline timeline = new Timeline().InitWithMaxKeyFramesOnTrack(2);
+            timeline.AddKeyFrame(KeyFrame.MakeScale(1f, 1f, KeyFrame.TransitionType.FRAME_TRANSITION_LINEAR, 0f));
+            timeline.AddKeyFrame(KeyFrame.MakeScale(1.2f, 1.2f, KeyFrame.TransitionType.FRAME_TRANSITION_LINEAR, 0.2f));
+            timeline.AddKeyFrame(KeyFrame.MakeColor(RGBAColor.solidOpaqueRGBA, KeyFrame.TransitionType.FRAME_TRANSITION_LINEAR, 0f));
+            timeline.AddKeyFrame(KeyFrame.MakeColor(RGBAColor.transparentRGBA, KeyFrame.TransitionType.FRAME_TRANSITION_LINEAR, 0.2f));
             timeline.delegateTimelineDelegate = aniPool;
 
-            int timelineId = clapEffect.AddTimeline(timeline);
-            clapEffect.PlayTimeline(timelineId);
-            _ = aniPool.AddChild(clapEffect);
+            _ = clapEffect.AddTimeline(timeline);
+            clapEffect.PlayTimeline(0);
         }
 
         /// <summary>
