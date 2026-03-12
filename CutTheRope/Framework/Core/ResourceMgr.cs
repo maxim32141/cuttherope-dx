@@ -27,9 +27,21 @@ namespace CutTheRope.Framework.Core
             }
         }
 
-        public void ClearCachedResources()
+        public void ClearCachedFonts()
         {
-            s_Resources.Clear();
+            List<string> fontKeys = [];
+            foreach (KeyValuePair<string, object> kvp in s_Resources)
+            {
+                if (kvp.Value is FontGeneric)
+                {
+                    fontKeys.Add(kvp.Key);
+                }
+            }
+            foreach (string key in fontKeys)
+            {
+                _ = s_Resources.Remove(key);
+            }
+            FontManager.ClearCache();
         }
 
         /// <summary>
@@ -358,6 +370,87 @@ namespace CutTheRope.Framework.Core
             }
         }
 
+        /// <summary>
+        /// Queues a batch of resources for opportunistic background prefetch.
+        /// </summary>
+        /// <param name="pack">Resource names to enqueue for silent warming.</param>
+        public void QueuePrefetchPack(IEnumerable<string> pack)
+        {
+            if (pack == null)
+            {
+                return;
+            }
+
+            foreach (string resourceName in pack)
+            {
+                QueuePrefetchResource(resourceName);
+            }
+        }
+
+        /// <summary>
+        /// Queues a single resource for background prefetch if it is not already cached or queued.
+        /// </summary>
+        /// <param name="resourceName">The string resource identifier to enqueue.</param>
+        public void QueuePrefetchResource(string resourceName)
+        {
+            if (!TryResolveResource(resourceName, out string localizedName))
+            {
+                return;
+            }
+
+            if (s_Resources.ContainsKey(localizedName) || !prefetchQueueSet.Add(localizedName))
+            {
+                return;
+            }
+
+            prefetchQueue.Add(localizedName);
+        }
+
+        /// <summary>
+        /// Indicates whether any background prefetch work remains queued.
+        /// </summary>
+        /// <returns><see langword="true"/> when at least one prefetched resource is still pending.</returns>
+        public bool HasPendingPrefetchResources()
+        {
+            return prefetchQueue.Count > 0;
+        }
+
+        /// <summary>
+        /// Loads the next queued prefetch resource, if any remain.
+        /// </summary>
+        /// <param name="loadedResourceName">The resource name that was loaded, or <see langword="null"/> if nothing was loaded.</param>
+        /// <returns><see langword="true"/> when a resource was loaded; otherwise, <see langword="false"/>.</returns>
+        public bool PrefetchNextResource(out string loadedResourceName)
+        {
+            while (prefetchQueue.Count > 0)
+            {
+                string resourceName = prefetchQueue[0];
+                prefetchQueue.RemoveAt(0);
+                _ = prefetchQueueSet.Remove(resourceName);
+
+                if (s_Resources.ContainsKey(resourceName))
+                {
+                    continue;
+                }
+
+                LoadResource(resourceName);
+                loadedResourceName = resourceName;
+                return true;
+            }
+
+            loadedResourceName = null;
+            return false;
+        }
+
+        /// <summary>
+        /// Clears all queued prefetch work without touching already-cached resources.
+        /// </summary>
+        public void ClearPrefetchQueue()
+        {
+            prefetchQueue.Clear();
+            prefetchQueueSet.Clear();
+        }
+
         public virtual void FreePack(string[] pack)
         {
             if (pack == null)
@@ -389,7 +482,7 @@ namespace CutTheRope.Framework.Core
             if (resourcesDelegate != null)
             {
                 DelayedDispatcher.DispatchFunc dispatchFunc = new(Rmgr_internalUpdate);
-                Timer = TimerManager.Schedule(dispatchFunc, this, 0.022222223f);
+                Timer = TimerManager.Schedule(dispatchFunc, this, 1f / 60f);
             }
         }
 
@@ -494,6 +587,10 @@ namespace CutTheRope.Framework.Core
         private int loadCount;
 
         private readonly List<string> loadQueue = [];
+
+        private readonly List<string> prefetchQueue = [];
+
+        private readonly HashSet<string> prefetchQueueSet = [];
 
         private int Timer;
 
