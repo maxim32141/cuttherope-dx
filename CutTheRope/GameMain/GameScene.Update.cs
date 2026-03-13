@@ -607,6 +607,8 @@ namespace CutTheRope.GameMain
                     conveyors.ProcessItems(socks);
                     conveyors.ProcessItems(tubes);
                     conveyors.ProcessItems(pumps);
+                    conveyors.ProcessItems(bungees);
+                    conveyors.ProcessItems(lightBulbs);
                     remaining -= step;
                 }
             }
